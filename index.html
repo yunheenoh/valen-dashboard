@@ -192,6 +192,46 @@ body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--bg);colo
   .metric-grid,.dash-top,.dash-grid{grid-template-columns:1fr;}
   .bc-nums{grid-template-columns:repeat(2,1fr);}
 }
+
+/* ── KPI 연동 카드 ── */
+.kpi-section{margin-bottom:18px;}
+.kpi-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.kpi-title{font-size:12px;font-weight:600;color:var(--text2);display:flex;align-items:center;gap:6px;}
+.kpi-src{font-size:10px;color:var(--text3);background:var(--bg);padding:2px 8px;border-radius:99px;}
+.kpi-loading{text-align:center;padding:20px;color:var(--text3);font-size:12px;}
+.kpi-error{font-size:11px;color:var(--red);padding:8px 12px;background:var(--red-l);border-radius:var(--rs);}
+
+.kpi-top{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px;}
+.kpi-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;}
+.kpi-lbl{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
+.kpi-val{font-size:20px;font-weight:700;color:var(--text);line-height:1;}
+.kpi-sub{font-size:10px;color:var(--text3);margin-top:3px;}
+.kpi-card.highlight{background:var(--navy);border-color:var(--navy);}
+.kpi-card.highlight .kpi-lbl{color:rgba(255,255,255,.5);}
+.kpi-card.highlight .kpi-val{color:#fff;}
+.kpi-card.highlight .kpi-sub{color:rgba(255,255,255,.4);}
+
+.kpi-monthly{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;}
+.kpi-month-title{font-size:12px;font-weight:600;margin-bottom:10px;}
+.kpi-month-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;}
+.kpi-month-item{text-align:center;}
+.kpi-month-name{font-size:10px;color:var(--text2);margin-bottom:3px;}
+.kpi-month-bar-wrap{height:40px;display:flex;align-items:flex-end;justify-content:center;gap:2px;}
+.kpi-mbar{width:14px;border-radius:3px 3px 0 0;transition:height .4s ease;}
+.kpi-mbar.target{background:var(--bg);border:1px solid var(--border);}
+.kpi-mbar.achieved{background:var(--blue);}
+.kpi-mbar.achieved.good{background:#4CAF50;}
+.kpi-mbar.achieved.warn{background:#FF9800;}
+.kpi-mbar.achieved.bad{background:var(--red);}
+.kpi-month-pct{font-size:10px;font-weight:600;color:var(--text);margin-top:3px;}
+.kpi-month-pct.no-data{color:var(--text3);}
+
+.kpi-brand-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--bg);font-size:12px;}
+.kpi-brand-row:last-child{border-bottom:none;}
+.kpi-brand-name{color:var(--text);font-weight:500;}
+.kpi-brand-fee{color:var(--text2);}
+.kpi-brand-bar{height:4px;background:var(--blue);border-radius:99px;margin-top:3px;}
+
 </style>
 </head>
 <body>
@@ -728,6 +768,134 @@ async function persist(){
   if(USE_GAS){try{await fetch(GAS_URL,{method:'POST',body:JSON.stringify({action:'save',records,goals})});}catch(e){console.error(e);}}
   localStorage.setItem('valen-v4',JSON.stringify({records,goals}));
 }
+
+// ── KPI 연동 ──
+let kpiData = null;
+async function loadKPI(force=false) {
+  if (!USE_GAS) {
+    document.getElementById('kpi-content').innerHTML = '<div class="kpi-error">GAS URL이 설정되지 않았어요. GitHub 배포 후 사용 가능해요.</div>';
+    return;
+  }
+  const btn = document.getElementById('kpi-refresh-btn');
+  if (btn) { btn.textContent = '로딩 중...'; btn.disabled = true; }
+  try {
+    const res = await fetch(GAS_URL + '?action=load_kpi');
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    kpiData = data;
+    renderKPI(data);
+  } catch(e) {
+    document.getElementById('kpi-content').innerHTML = '<div class="kpi-error">⚠ KPI 로드 실패: ' + e.message + '</div>';
+  } finally {
+    if (btn) { btn.textContent = '↻ 새로고침'; btn.disabled = false; }
+  }
+}
+
+function fmtFee(v) {
+  if (!v || isNaN(v)) return '—';
+  const n = typeof v === 'string' ? parseFloat(v.replace(/,/g,'')) : v;
+  if (n >= 100000000) return (n/100000000).toFixed(1) + '억';
+  if (n >= 10000000) return Math.round(n/1000000) + '천만';
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 10000) return Math.round(n/10000) + '만';
+  return n.toLocaleString();
+}
+function fmtPct(v) {
+  if (!v) return '—';
+  if (typeof v === 'string' && v.includes('%')) return v;
+  if (typeof v === 'number' && v <= 1 && v > 0) return Math.round(v*100) + '%';
+  if (typeof v === 'number') return Math.round(v) + '%';
+  return v;
+}
+
+function renderKPI(data) {
+  const s = data.summary || {};
+  const monthly = data.monthly || [];
+  const brands = data.brandFee || [];
+
+  // 분기 데이터
+  const quarters = s.quarters || [];
+  const q1 = quarters.find(q=>q.quarter==='1Q') || {};
+  const q2 = quarters.find(q=>q.quarter==='2Q') || {};
+
+  // 월별 차트 (2026년 1~현재)
+  const now = new Date();
+  const curMon = now.getMonth() + 1;
+  const showMonths = monthly.filter(m => m.month >= 1 && m.month <= 12).slice(0, 6);
+  const maxTarget = Math.max(...showMonths.map(m => typeof m.target === 'number' ? m.target : 0), 1);
+
+  // 이번 달 달성
+  const thisMon = monthly.find(m => m.month === curMon) || {};
+  const thisRate = thisMon.rate || 0;
+  const rateNum = typeof thisRate === 'string' ? parseInt(thisRate) : Math.round((thisRate <= 1 ? thisRate * 100 : thisRate));
+
+  document.getElementById('kpi-content').innerHTML = `
+    <div class="kpi-top">
+      <div class="kpi-card highlight">
+        <div class="kpi-lbl">2026 팀 목표 매출</div>
+        <div class="kpi-val">${fmtFee(s.totalRevenue || (q1.target||0)+(q2.target||0)+385000000+580000000)}</div>
+        <div class="kpi-sub">연간 목표</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">연간 달성률</div>
+        <div class="kpi-val">${fmtPct(s.achieveRate)}</div>
+        <div class="kpi-sub">목표 대비</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">1Q 달성</div>
+        <div class="kpi-val">${fmtPct(q1.rate)}</div>
+        <div class="kpi-sub">${fmtFee(q1.achieved)} / ${fmtFee(q1.target)}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-lbl">2Q 달성</div>
+        <div class="kpi-val">${fmtPct(q2.rate)}</div>
+        <div class="kpi-sub">${fmtFee(q2.achieved)} / ${fmtFee(q2.target)}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;">
+      <div class="kpi-monthly">
+        <div class="kpi-month-title">📈 월별 광고 수익 달성 현황</div>
+        <div class="kpi-month-grid">
+          ${showMonths.map(m => {
+            const tgt = typeof m.target === 'number' ? m.target : 0;
+            const ach = typeof m.achieved === 'number' ? m.achieved : 0;
+            const rate = tgt > 0 ? Math.round(ach/tgt*100) : 0;
+            const tH = tgt > 0 ? Math.round((tgt/maxTarget)*36) : 4;
+            const aH = tgt > 0 ? Math.round((ach/maxTarget)*36) : 0;
+            const cls = rate >= 90 ? 'good' : rate >= 60 ? 'warn' : ach > 0 ? 'bad' : '';
+            const mn = ['','1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+            return `<div class="kpi-month-item">
+              <div class="kpi-month-name">${mn[m.month]}</div>
+              <div class="kpi-month-bar-wrap">
+                <div class="kpi-mbar target" style="height:${tH}px"></div>
+                <div class="kpi-mbar achieved ${cls}" style="height:${aH}px"></div>
+              </div>
+              ${ach > 0 ? `<div class="kpi-month-pct">${rate}%</div>` : `<div class="kpi-month-pct no-data">—</div>`}
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:12px;margin-top:8px;font-size:10px;color:var(--text3);">
+          <span>□ 목표</span><span style="color:var(--blue);">■ 달성</span>
+        </div>
+      </div>
+      <div class="kpi-monthly">
+        <div class="kpi-month-title">💰 2026 브랜드 FEE TOP10</div>
+        ${brands.slice(0,10).map((b,i) => {
+          const maxFee = brands[0]?.totalFee || 1;
+          const pct = Math.round(b.totalFee/maxFee*100);
+          return `<div class="kpi-brand-row">
+            <div>
+              <div class="kpi-brand-name">${b.brand}</div>
+              <div class="kpi-brand-bar" style="width:${pct}%"></div>
+            </div>
+            <div class="kpi-brand-fee">${fmtFee(b.totalFee)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 async function init(){
   const now=new Date();
   const ym=now.getFullYear()+'-'+pad2(now.getMonth()+1);
@@ -740,6 +908,7 @@ async function init(){
     if(old){const arr=JSON.parse(old);records=arr.map(r=>({id:'r'+r.id,month:r.month||ym,week:r.week||'0',part:r.part,brand:r.brand,sa:r.sa||0,ra:r.ra||0,memo:r.memo||''}));}
   }
   setCurMonth(ym);
+  loadKPI();
 }
 init();
 </script>
